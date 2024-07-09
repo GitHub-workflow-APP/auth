@@ -5,8 +5,8 @@ exception
 end $$;
 
 do $$ begin
-alter table {{ index .Options "Namespace" }}.mfa_factors add column public_key jsonb null;
-alter table {{ index .Options "Namespace" }}.mfa_factors add column aaguid uuid null;
+alter table {{ index .Options "Namespace" }}.mfa_factors add column public_key bytea null;
+alter table {{ index .Options "Namespace" }}.mfa_factors add column credential_id bytea null;
 
 alter table {{ index .Options "Namespace" }}.mfa_challenges add column if not exists webauthn_challenge text null;
 alter table {{ index .Options "Namespace" }}.mfa_challenges add column if not exists user_verification user_verification null;

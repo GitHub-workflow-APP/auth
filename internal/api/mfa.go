@@ -54,6 +54,11 @@ type WebauthnRegisterStartResponse struct {
 type WebauthnRegisterFinishResponse struct {
 }
 
+type WebauthnLoginFinishResponse struct {
+}
+
+
+
 type VerifyFactorParams struct {
 	ChallengeID uuid.UUID `json:"challenge_id"`
 	Code        string    `json:"code"`
@@ -66,6 +71,7 @@ type ChallengeFactorResponse struct {
 
 type WebauthnLoginStartResponse struct {
 	PublicKeyCredentialRequestOptions *protocol.CredentialAssertion `json:"public_key_credential_request_options"`
+	ChallengeID uuid.UUID `json:"challenge_id"`
 	// TBD
 }
 
@@ -143,13 +149,22 @@ func (a *API) handleWebauthnVerification(w http.ResponseWriter, r *http.Request,
 
 	// TODO: Decide based on the factor state whether this is a registration or login
 	if factor.Status == models.FactorStateUnverified.String() {
-		_, err := webAuthn.FinishRegistration(user, sessionData, r)
+		credential, err := webAuthn.FinishRegistration(user, sessionData, r)
 		if err != nil {
 			return err
 		}
+		fmt.Println(credential)
+
 		err = db.Transaction(func(tx *storage.Connection) error {
+			if terr := challenge.Verify(tx); terr != nil {
+			return terr
+		}
 			if !factor.IsVerified() {
 				if terr := factor.UpdateStatus(tx, models.FactorStateVerified); terr != nil {
+					return terr
+				}
+
+				if terr := factor.UpdateWebauthnFactorPostVerification(tx, credential.PublicKey, credential.ID); terr != nil {
 					return terr
 				}
 			}
@@ -163,12 +178,14 @@ func (a *API) handleWebauthnVerification(w http.ResponseWriter, r *http.Request,
 	}
 
 	// Login case where factor is verified
-	_, err = webAuthn.FinishLogin(user, sessionData, r)
+	credential, err := webAuthn.FinishLogin(user, sessionData, r)
 	if err != nil {
 		return internalServerError("login borked")
 	}
+	fmt.Println(credential)
 
-	return badRequestError(ErrorCodeValidationFailed, "unknown error")
+	return sendJSON(w, http.StatusOK, &WebauthnLoginFinishResponse{})
+
 }
 
 func (a *API) EnrollFactor(w http.ResponseWriter, r *http.Request) error {
@@ -314,9 +331,24 @@ func (a *API) ChallengeFactor(w http.ResponseWriter, r *http.Request) error {
 			SessionData: session,
 		}
 		challenge = ws.ToChallenge(factor.ID, ipAddress)
+		if err := db.Transaction(func(tx *storage.Connection) error {
+			if terr := tx.Create(challenge); terr != nil {
+				return terr
+			}
+			if terr := models.NewAuditLogEntry(r, tx, user, models.CreateChallengeAction, r.RemoteAddr, map[string]interface{}{
+				"factor_id":     factor.ID,
+				"factor_status": factor.Status,
+			}); terr != nil {
+				return terr
+			}
+			return nil
+		}); err != nil {
+			return err
+		}
 
 		return sendJSON(w, http.StatusOK, &WebauthnLoginStartResponse{
 			PublicKeyCredentialRequestOptions: options,
+			ChallengeID: challenge.ID,
 		})
 	} else {
 		challenge = models.NewChallenge(factor, ipAddress)

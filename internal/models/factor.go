@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"github.com/go-webauthn/webauthn/webauthn"
 
 	"github.com/gobuffalo/pop/v6"
 	"github.com/gofrs/uuid"
@@ -122,6 +123,9 @@ type Factor struct {
 	Secret       string      `json:"-" db:"secret"`
 	FactorType   string      `json:"factor_type" db:"factor_type"`
 	Challenge    []Challenge `json:"-" has_many:"challenges"`
+	// TODO: Encrypt this. Maybe store as string
+	PublicKey    []byte      `json:"-" db:"public_key"`
+	CredentialID []byte `json:"-" db:"credential_id"`
 }
 
 func (Factor) TableName() string {
@@ -169,6 +173,15 @@ func (f *Factor) GetSecret(decryptionKeys map[string]string, encrypt bool, encry
 	return f.Secret, encrypt, nil
 }
 
+func (f *Factor) ToCredential() webauthn.Credential {
+	// TODO: Consider including other fields
+	return webauthn.Credential{
+        ID:        f.CredentialID,
+        PublicKey: f.PublicKey,
+    }
+}
+
+
 func FindFactorByFactorID(conn *storage.Connection, factorID uuid.UUID) (*Factor, error) {
 	var factor Factor
 	err := conn.Find(&factor, factorID)
@@ -198,6 +211,12 @@ func (f *Factor) UpdateFriendlyName(tx *storage.Connection, friendlyName string)
 func (f *Factor) UpdateStatus(tx *storage.Connection, state FactorState) error {
 	f.Status = state.String()
 	return tx.UpdateOnly(f, "status", "updated_at")
+}
+
+func (f *Factor) UpdateWebauthnFactorPostVerification(tx *storage.Connection, publicKey []byte, credentialID []byte) error {
+	f.PublicKey = publicKey
+	f.CredentialID = credentialID
+	return tx.UpdateOnly(f, "public_key", "credential_id", "updated_at")
 }
 
 // UpdateFactorType modifies the factor type
